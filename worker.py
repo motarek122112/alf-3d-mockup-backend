@@ -10,6 +10,8 @@ from PIL import Image,ImageDraw,ImageFilter,ImageFont
 from .service import ROOT,connect,APPROVED_MODE
 from .registry import BY_CATEGORY,ALLOWED_COLORS
 from .modeling import create_scene,PROFILES,ZONES,material_color
+from .approved_assets import lookup_approved_asset
+from .approved_render import render_approved_asset
 
 
 def update(job,stage,progress=None,status='RUNNING',error=None,result=None):
@@ -87,7 +89,8 @@ def process_job(job_id):
     if not row or row['status'] not in ('QUEUED','RUNNING'):return False
     try:
         params=json.loads(row['config']);garment=BY_CATEGORY[params['category_id']]
-        if not APPROVED_MODE and not garment.approved:raise RuntimeError('Manufacturer-approved model is not available')
+        verified_asset=lookup_approved_asset(params['model_id'])
+        if not APPROVED_MODE and not verified_asset:raise RuntimeError('Manufacturer-approved model is not available')
         logo_path=ROOT/'uploads'/row['session_id']/(params['logo_upload_id']+'.png')
         if not logo_path.is_file():raise ValueError('Uploaded logo is missing')
         update(job_id,'PREPROCESSING_LOGO')
@@ -97,6 +100,11 @@ def process_job(job_id):
         update(job_id,'PREPARING_GARMENT')
         model=params['model_id'];color=ALLOWED_COLORS[params['color'].lower()];method=params['branding_method'];placements=params['placements']
         output=ROOT/'results'/job_id;output.mkdir(parents=True,exist_ok=True)
+        if verified_asset:
+            params['color_hex']=color
+            data=render_approved_asset(job_id,params,logo_path,output,lambda step:update(job_id,step))
+            update(job_id,'COMPLETED',progress=100,status='COMPLETED',result=data)
+            return True
         update(job_id,'APPLYING_BRANDING')
         scene=create_scene(model,color,logo,method,[p['name'] for p in placements],placements[0]['scale'])
         scene.export(output/'model.glb',file_type='glb')
@@ -108,7 +116,7 @@ def process_job(job_id):
         for file in expected:
             p=output/file
             if not p.is_file() or p.stat().st_size<500:raise IOError(f'Render missing: {file}')
-        update(job_id,'COMPLETED',progress=100,status='COMPLETED',result={'files':expected,'provisional':not garment.approved})
+        update(job_id,'COMPLETED',progress=100,status='COMPLETED',result={'files':expected,'provisional':True,'renderer':'DEVELOPMENT_ONLY'})
         return True
     except Exception as exc:
         update(job_id,'FAILED',status='FAILED',error=str(exc)[:300])

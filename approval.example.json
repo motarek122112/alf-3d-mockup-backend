@@ -1,0 +1,15 @@
+{
+  "approved": false,
+  "model_id": "security",
+  "model_format": "glb",
+  "model_sha256": "REPLACE_WITH_64_CHARACTER_LOWERCASE_SHA256",
+  "physical_reference_reviewed": false,
+  "commercial_use_rights_verified": false,
+  "material_reviewed": false,
+  "verified_decal_surfaces": ["left_chest", "right_chest", "back", "sleeve"],
+  "placement_scale_limits": {"left_chest": [0.08, 0.20], "right_chest": [0.08, 0.20], "back": [0.10, 0.28], "sleeve": [0.06, 0.18]},
+  "approved_by": "",
+  "approved_at": "",
+  "garment_reference_id": "",
+  "commercial_license_reference": ""
+}

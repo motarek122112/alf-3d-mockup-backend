@@ -9,10 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel,Field,field_validator
 from itsdangerous import URLSafeTimedSerializer,BadSignature,SignatureExpired
 from .registry import BY_CATEGORY,ALLOWED_COLORS,public_registry
+from .approved_assets import lookup_approved_asset, blender_available
 
 ROOT=Path(os.getenv('ALF_MOCKUP_DATA','/tmp/alf-mockup-data')).resolve()
 DB=ROOT/'jobs.sqlite3'
-APPROVED_MODE=os.getenv('ALF_ALLOW_PROVISIONAL_MODELS','false').lower()=='true'
+APPROVED_MODE=os.getenv('ALF_ALLOW_PROVISIONAL_MODELS','false').lower()=='true' and os.getenv('ALF_MOCKUP_ENV','development')!='production'
 SECRET=os.getenv('ALF_MOCKUP_SIGNING_KEY','')
 if len(SECRET)<32:
     if os.getenv('ALF_MOCKUP_ENV','development')=='production':raise RuntimeError('ALF_MOCKUP_SIGNING_KEY must be set to 32+ characters in production')
@@ -76,10 +77,18 @@ def scoped_path(parent,name):
 
 @app.get('/health')
 def health():
-    return {'api':'ok','rendering':'provisional' if APPROVED_MODE else 'awaiting_approved_3d_assets','worker':'run separately', 'production_ready':False}
+    approved=[m for m in BY_CATEGORY.values() if lookup_approved_asset(m.model)]
+    return {'api':'ok','rendering':'provisional_dev_only' if APPROVED_MODE else 'blender_approved_assets' if approved else 'awaiting_approved_3d_assets','worker':'run separately', 'production_ready':False, 'verified_assets':len(approved), 'blender_detected':blender_available()}
 
 @app.get('/api/mockups/catalog')
-def catalog():return public_registry(APPROVED_MODE)
+def catalog():
+    result=public_registry(APPROVED_MODE)
+    for entry in result['categories']:
+        verified=lookup_approved_asset(entry['model_id'])
+        entry['approved']=bool(verified)
+        entry['available_for_generation']=bool(verified) or APPROVED_MODE
+        entry['asset_origin']='manufacturer_reviewed' if verified else 'provisional_dev_only'
+    return result
 
 @app.post('/api/mockups/sessions')
 async def new_session(request:Request):
@@ -121,7 +130,10 @@ async def create_job(req:JobRequest, authorization:str|None=Header(default=None)
     garment=BY_CATEGORY.get(req.category_id)
     if garment is None:raise HTTPException(422,'Unsupported uniform category')
     if req.model_id!=garment.model:raise HTTPException(422,'Model subtype is not approved for this category')
-    if not garment.approved and not APPROVED_MODE:raise HTTPException(422,'A manufacturer-approved 3D asset is required before customer generation can be enabled')
+    verified_asset=lookup_approved_asset(req.model_id)
+    if not verified_asset and not APPROVED_MODE:raise HTTPException(422,'A manufacturer-approved 3D asset and operational Blender renderer are required')
+    if verified_asset and any(p.name not in verified_asset.allowed_decals for p in req.placements):raise HTTPException(422,'Branding placement has not been approved for this garment asset')
+    if verified_asset and any(not (verified_asset.approval_data['placement_scale_limits'][p.name][0] <= p.scale <= verified_asset.approval_data['placement_scale_limits'][p.name][1]) for p in req.placements):raise HTTPException(422,'Logo size exceeds approved branding bounds')
     if req.color.lower() not in ALLOWED_COLORS:raise HTTPException(422,'Choose an available uniform color')
     if req.branding_method not in garment.methods:raise HTTPException(422,'Branding method not supported')
     if not req.customer_approved:raise HTTPException(422,'Customer approval required')
